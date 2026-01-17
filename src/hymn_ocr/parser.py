@@ -253,6 +253,10 @@ def clean_body_text(text: str) -> str:
     Clean hymn body text.
 
     - Remove page numbers
+    - Remove symbol artifacts (XX, WC, Xx, etc.)
+    - Remove dates at the end
+    - Remove repetition bar markers (|)
+    - Remove instruction lines (Em pé, sem instrumentos)
     - Normalize whitespace
     - Preserve stanza breaks (double newlines)
 
@@ -268,12 +272,65 @@ def clean_body_text(text: str) -> str:
     # Split into lines
     lines = text.split("\n")
 
-    # Remove lines that are just numbers (page numbers, stanza markers)
+    # Patterns to remove
+    # Symbol artifacts: XX, WC, Xx, CC, x, X at end or as standalone
+    symbol_pattern = re.compile(r"^[XxWwCc]{1,2}\s*[xX]?\s*$")
+    # Date pattern at end of text
+    date_pattern = re.compile(r"^\s*\(\d{2}/\d{2}/\d{4}\)\s*$")
+    # Instructions that should be in metadata
+    instruction_line_pattern = re.compile(
+        r"^\s*([Ee]m pé|[Ss]em instrumentos|[Ss]entados?)\s*$"
+    )
+    # OCR noise: random uppercase letters with parentheses (e.g., "(NOINAIININN")
+    ocr_noise_pattern = re.compile(r"^[\(\)\[\]oO0lI1NnAa\s]+$")
+    # Single character lines (usually OCR errors)
+    single_char_pattern = re.compile(r"^[a-zA-ZoO0\(\)\[\]]$")
+    # Lines with only consonants or gibberish (no real Portuguese words)
+    gibberish_pattern = re.compile(r"^\(?[NIOAL1l0]{4,}\)?$")
+
     cleaned_lines = []
     for line in lines:
         stripped = line.strip()
-        # Keep empty lines (stanza breaks) and non-number lines
-        if not stripped or not stripped.isdigit():
+
+        # Skip empty lines (but keep them for stanza breaks)
+        if not stripped:
+            cleaned_lines.append("")
+            continue
+
+        # Skip lines that are just numbers (page numbers)
+        if stripped.isdigit():
+            continue
+
+        # Skip symbol artifacts
+        if symbol_pattern.match(stripped):
+            continue
+
+        # Skip standalone dates
+        if date_pattern.match(stripped):
+            continue
+
+        # Skip standalone instruction lines
+        if instruction_line_pattern.match(stripped):
+            continue
+
+        # Skip OCR noise (random chars like "(NOINAIININN")
+        if ocr_noise_pattern.match(stripped):
+            continue
+
+        # Skip single character lines
+        if single_char_pattern.match(stripped):
+            continue
+
+        # Skip gibberish lines
+        if gibberish_pattern.match(stripped):
+            continue
+
+        # Remove repetition bar markers (|) at the start of lines
+        if stripped.startswith("|"):
+            stripped = stripped[1:].strip()
+
+        # Add the cleaned line
+        if stripped:
             cleaned_lines.append(stripped)
 
     # Join and normalize multiple blank lines

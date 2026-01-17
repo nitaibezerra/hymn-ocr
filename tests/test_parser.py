@@ -315,6 +315,72 @@ class TestCleanBodyText:
         result = clean_body_text(text)
         assert result == "Text"
 
+    def test_clean_body_text_removes_symbol_xx(self):
+        """Test that XX symbol artifacts are removed."""
+        text = "Line 1\nLine 2\nXX\nLine 3"
+        result = clean_body_text(text)
+        assert "XX" not in result
+        assert "Line 1" in result
+        assert "Line 3" in result
+
+    def test_clean_body_text_removes_symbol_wc(self):
+        """Test that WC x symbol artifacts are removed."""
+        text = "Line 1\nWC x\nLine 2"
+        result = clean_body_text(text)
+        assert "WC" not in result
+
+    def test_clean_body_text_removes_symbol_cc(self):
+        """Test that CC x symbol artifacts are removed."""
+        text = "Line 1\nCC x\nLine 2"
+        result = clean_body_text(text)
+        assert "CC" not in result
+
+    def test_clean_body_text_removes_dates(self):
+        """Test that standalone dates are removed."""
+        text = "Line 1\nLine 2\n(18/01/2020)"
+        result = clean_body_text(text)
+        assert "(18/01/2020)" not in result
+
+    def test_clean_body_text_removes_repetition_markers(self):
+        """Test that | markers are removed from line starts."""
+        text = "| Line 1\n| Line 2\nLine 3"
+        result = clean_body_text(text)
+        assert "|" not in result
+        assert "Line 1" in result
+        assert "Line 2" in result
+
+    def test_clean_body_text_removes_instruction_lines(self):
+        """Test that standalone instruction lines are removed."""
+        text = "sem instrumentos\nLine 1\nLine 2"
+        result = clean_body_text(text)
+        assert "sem instrumentos" not in result
+        assert "Line 1" in result
+
+    def test_clean_body_text_removes_ocr_noise(self):
+        """Test that OCR noise like (NOINAIININN is removed."""
+        text = "Line 1\n(NOINAIININN\nLine 2"
+        result = clean_body_text(text)
+        assert "NOINAIININN" not in result
+        assert "Line 1" in result
+        assert "Line 2" in result
+
+    def test_clean_body_text_removes_single_char(self):
+        """Test that single character lines are removed."""
+        text = "Line 1\no\nLine 2"
+        result = clean_body_text(text)
+        # Check single 'o' is removed but lines are kept
+        lines = result.split("\n")
+        assert "o" not in lines
+        assert "Line 1" in result
+        assert "Line 2" in result
+
+    def test_clean_body_text_removes_gibberish(self):
+        """Test that gibberish lines are removed."""
+        text = "Line 1\nNOIALL\nLine 2"
+        result = clean_body_text(text)
+        assert "NOIALL" not in result
+        assert "Line 1" in result
+
 
 class TestHasPatterns:
     """Tests for pattern detection functions."""
