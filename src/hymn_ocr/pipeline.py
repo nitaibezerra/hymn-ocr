@@ -7,7 +7,7 @@ from PIL import Image
 
 from hymn_ocr.merger import merge_multipage_hymns
 from hymn_ocr.models import Hymn, HymnBook, PageData, PageType
-from hymn_ocr.ocr_engine import clean_ocr_text, get_text_line_positions, ocr_zone
+from hymn_ocr.ocr_engine import clean_ocr_text, get_text_line_positions, ocr_image, ocr_zone
 from hymn_ocr.parser import (
     clean_body_text,
     parse_date,
@@ -15,7 +15,7 @@ from hymn_ocr.parser import (
     parse_metadata,
 )
 from hymn_ocr.pdf_processor import convert_pdf_to_images, get_page_count
-from hymn_ocr.repetition_detector import detect_repetition_bars
+from hymn_ocr.repetition_detector_v2 import detect_repetition_bars_v2
 from hymn_ocr.zone_detector import classify_page, detect_zones, pil_to_cv2
 
 
@@ -82,15 +82,16 @@ def process_page(
             page_data.style = metadata_info.style
             page_data.extra_instructions = metadata_info.extra_instructions
 
-    # Parse date from footer
-    if footer_text:
-        page_data.received_at = parse_date(footer_text)
+    # Parse date from full page OCR (more reliable than zone-specific OCR)
+    full_page_text = ocr_image(cv2_image)
+    page_data.received_at = parse_date(full_page_text)
 
-    # Detect repetition bars in body zone
-    if zones.body:
-        text_lines = get_text_line_positions(cv2_image, zones.body)
-        page_data.repetitions = detect_repetition_bars(
-            cv2_image, text_lines=text_lines, zone=zones.body
+    # Detect repetition bars using v2 algorithm (vertical projection profile)
+    if body_text and zones.body:
+        page_data.repetitions = detect_repetition_bars_v2(
+            cv2_image,
+            zones.body,
+            body_text,
         )
 
     return page_data

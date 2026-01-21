@@ -76,6 +76,15 @@ def parse_header(text: str) -> Optional[ParsedHeader]:
         original_str = match.group(3)
         original_number = int(original_str) if original_str else None
 
+        # Fix OCR error: ")" read as "0)" adds extra 0 (e.g., 603 instead of 63)
+        # Hymn numbers are typically 1-200, so if > 200, try removing the extra 0
+        if original_number and original_number > 200:
+            # Check if removing the second-to-last digit gives a valid number
+            fixed_str = original_str[:-2] + original_str[-1]  # e.g., "603" -> "63"
+            fixed_number = int(fixed_str)
+            if 1 <= fixed_number <= 200:
+                original_number = fixed_number
+
         return ParsedHeader(
             number=number,
             title=title,

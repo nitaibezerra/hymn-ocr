@@ -246,14 +246,13 @@ def classify_page(image: np.ndarray, ocr_text: Optional[str] = None) -> PageType
 
     # If we have OCR text, use it for classification
     if ocr_text:
-        # Look for header pattern at the start
+        # Look for header pattern at the start (NN. Title)
         header_match = re.match(r"^\s*(\d+)\.\s+", ocr_text)
         if header_match:
             return PageType.NEW_HYMN
 
-        # Look for date/symbol at the end (indicates end of hymn)
-        has_ending = re.search(r"\(\d{2}/\d{2}/\d{4}\)", ocr_text)
-        if not has_ending and len(ocr_text.strip()) > 50:
+        # No header pattern but has text content = continuation page
+        if len(ocr_text.strip()) > 50:
             return PageType.CONTINUATION
 
     # Image-based classification
