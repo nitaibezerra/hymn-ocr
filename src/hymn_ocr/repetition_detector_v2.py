@@ -17,6 +17,7 @@ from typing import Optional
 import cv2
 import numpy as np
 import pytesseract
+from scipy.ndimage import label
 
 from hymn_ocr.zone_detector import Zone, extract_zone
 
@@ -249,6 +250,53 @@ def detect_repetition_bars_v2(
     if not initial_segments:
         return None
 
+    # 4.5. NEW: Try per-line horizontal analysis for asymmetric patterns
+    # This approach counts how many vertical bars exist at each line's Y position
+    # Enables detection of patterns like "3-4, 1-4" where lines 3-4 have 2 bars
+    # ONLY use when:
+    # - Single segment detected (potential asymmetric pattern hidden in one segment)
+    # - Segment covers enough lines (at least 3) to potentially have internal bars
+    # - Clear variation in bar counts within the segment
+    if len(line_boundaries) >= 3 and len(initial_segments) == 1:
+        segment = initial_segments[0]
+        segment_height = segment.y_end - segment.y_start
+
+        # Only apply if segment is large enough to contain multiple bar levels
+        # (e.g., 4 lines = ~25% of body for 16-line hymns, or ~50% for 8-line hymns)
+        segment_percent = segment_height / body_height
+        if segment_percent >= 0.15:
+            # Filter line_boundaries to only include lines within/near the segment
+            # This prevents noise detection on lines far from the actual bars
+            segment_line_boundaries = []
+            for i, (y_min, y_max) in enumerate(line_boundaries):
+                line_center = (y_min + y_max) / 2
+                # Line overlaps with segment if center is within segment bounds (with margin)
+                margin = (y_max - y_min) / 2  # Half line height as margin
+                if segment.y_start - margin <= line_center <= segment.y_end + margin:
+                    segment_line_boundaries.append((y_min, y_max))
+
+            # Need at least 3 lines within segment for asymmetric detection
+            if len(segment_line_boundaries) >= 3:
+                bar_counts = count_bars_per_line(bar_region, segment_line_boundaries)
+                max_bars = max(bar_counts) if bar_counts else 0
+                min_bars = min(bar_counts) if bar_counts else 0
+
+                # Only use if there's CLEAR variation: some lines with 2+ bars, some with 1
+                if max_bars >= 2 and min_bars >= 1 and min_bars < max_bars:
+                    # Find lines with max bars (internal) vs any bars (external)
+                    internal_lines = [i + 1 for i, c in enumerate(bar_counts) if c == max_bars]
+                    external_lines = [i + 1 for i, c in enumerate(bar_counts) if c >= 1]
+
+                    # Validate the pattern makes sense:
+                    # 1. Internal lines should be contiguous
+                    # 2. Internal should be a proper subset of external
+                    if (internal_lines and external_lines and
+                        internal_lines != external_lines and
+                        max(internal_lines) - min(internal_lines) + 1 == len(internal_lines)):
+                        result = deduce_repetitions_from_bar_counts(bar_counts)
+                        if result:
+                            return result
+
     # 5. Apply gap detection ONLY for potential nested bars
     # Conditions for gap detection:
     # - Only ONE initial segment was found
@@ -477,6 +525,195 @@ def compute_vertical_profile(bar_region: np.ndarray) -> Optional[np.ndarray]:
     profile = np.sum(edges_closed, axis=1).astype(float)
 
     return profile
+
+
+def compute_horizontal_profile(slice_region: np.ndarray) -> np.ndarray:
+    """
+    Compute horizontal profile (sum along Y axis) of a horizontal slice.
+
+    Vertical bars appear as valleys (dark regions) in the horizontal profile.
+    We use inverted binary threshold to detect dark bar regions.
+
+    Args:
+        slice_region: BGR image of a horizontal slice from the bar region.
+
+    Returns:
+        1D numpy array with "bar presence" for each column (X position).
+        Higher values indicate darker (bar) regions.
+        Empty array if input is invalid.
+    """
+    if slice_region is None or slice_region.size == 0:
+        return np.array([])
+
+    # Convert to grayscale
+    if len(slice_region.shape) == 3:
+        gray = cv2.cvtColor(slice_region, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = slice_region.copy()
+
+    # Threshold to find dark regions (bars are dark)
+    # Invert so bars become white (high values)
+    _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+
+    # Sum vertically - each X gets a "dark region presence score"
+    profile = np.sum(binary, axis=0).astype(float)
+
+    return profile
+
+
+def count_peaks_in_profile(
+    profile: np.ndarray,
+    threshold_ratio: float = 0.3,
+    min_width: int = 3,
+) -> int:
+    """
+    Count the number of significant peaks (bars) in a horizontal profile.
+
+    Each peak represents a vertical bar. Peaks are found by thresholding
+    the profile and counting connected regions above the threshold.
+
+    Args:
+        profile: 1D array from compute_horizontal_profile().
+        threshold_ratio: Minimum intensity relative to max to be considered a peak.
+        min_width: Minimum width in pixels for a region to count as a bar.
+
+    Returns:
+        Number of peaks (bars) detected.
+    """
+    if len(profile) == 0:
+        return 0
+
+    max_val = np.max(profile)
+    if max_val == 0:
+        return 0
+
+    # Normalize and threshold
+    normalized = profile / max_val
+    is_peak = normalized > threshold_ratio
+
+    # Find connected regions
+    labeled_array, num_features = label(is_peak)
+
+    # Filter by minimum width
+    valid_bars = 0
+    for region_id in range(1, num_features + 1):
+        region_mask = labeled_array == region_id
+        region_width = np.sum(region_mask)
+        if region_width >= min_width:
+            valid_bars += 1
+
+    return valid_bars
+
+
+def count_bars_per_line(
+    bar_region: np.ndarray,
+    line_boundaries: list[tuple[int, int]],
+    slice_margin: int = 5,
+) -> list[int]:
+    """
+    Count how many vertical bars exist at each text line's Y position.
+
+    For each line of text, takes a horizontal slice at that line's center
+    and counts the number of vertical bar edges detected.
+
+    This enables detection of asymmetric patterns like "3-4, 1-4" where
+    lines 3-4 have 2 bars (internal + external) while lines 1-2 have 1 bar.
+
+    Args:
+        bar_region: BGR image of the left margin (bar) region.
+        line_boundaries: List of (y_min, y_max) for each text line.
+        slice_margin: Pixels above/below line center to include in slice.
+
+    Returns:
+        List of bar counts, one per line. E.g., [1, 1, 2, 2] means
+        lines 1-2 have 1 bar each, lines 3-4 have 2 bars each.
+    """
+    if bar_region is None or bar_region.size == 0:
+        return []
+
+    if not line_boundaries:
+        return []
+
+    bar_counts = []
+    region_height = bar_region.shape[0]
+
+    for y_min, y_max in line_boundaries:
+        # Take a horizontal slice at the center of this line
+        y_center = (y_min + y_max) // 2
+        slice_y_start = max(0, y_center - slice_margin)
+        slice_y_end = min(region_height, y_center + slice_margin)
+
+        # Skip if slice is too small
+        if slice_y_end <= slice_y_start:
+            bar_counts.append(0)
+            continue
+
+        horizontal_slice = bar_region[slice_y_start:slice_y_end, :]
+
+        # Compute horizontal profile for this slice
+        h_profile = compute_horizontal_profile(horizontal_slice)
+
+        # Count peaks (bars) in the profile
+        num_bars = count_peaks_in_profile(h_profile)
+        bar_counts.append(num_bars)
+
+    return bar_counts
+
+
+def deduce_repetitions_from_bar_counts(bar_counts: list[int]) -> Optional[str]:
+    """
+    Deduce repetition patterns from per-line bar counts.
+
+    Logic:
+    - Lines with max_bars = covered by ALL bars (internal + external)
+    - Lines with >= 1 bar = covered by the outermost bar
+
+    Example:
+    - bar_counts = [1, 1, 2, 2] (4 lines)
+    - max_bars = 2
+    - internal_lines = [3, 4] (where count == max_bars)
+    - external_lines = [1, 2, 3, 4] (where count >= 1)
+    - Result: "3-4, 1-4"
+
+    Args:
+        bar_counts: List of bar counts per line from count_bars_per_line().
+
+    Returns:
+        Repetition string like "3-4, 1-4" or None if no bars detected.
+    """
+    if not bar_counts:
+        return None
+
+    max_bars = max(bar_counts)
+    if max_bars == 0:
+        return None
+
+    # Find lines covered by the external bar (any bar presence)
+    external_lines = [i + 1 for i, c in enumerate(bar_counts) if c >= 1]
+
+    # Find lines covered by internal bars (maximum bar count)
+    internal_lines = []
+    if max_bars > 1:
+        internal_lines = [i + 1 for i, c in enumerate(bar_counts) if c == max_bars]
+
+    if not external_lines:
+        return None
+
+    result = []
+
+    # Add internal bars first (if different from external)
+    if internal_lines and internal_lines != external_lines:
+        # Only add if internal covers a contiguous subset
+        internal_start = min(internal_lines)
+        internal_end = max(internal_lines)
+        result.append(f"{internal_start}-{internal_end}")
+
+    # Add external bar
+    external_start = min(external_lines)
+    external_end = max(external_lines)
+    result.append(f"{external_start}-{external_end}")
+
+    return ", ".join(result) if result else None
 
 
 def find_bar_segments(

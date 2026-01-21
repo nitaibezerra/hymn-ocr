@@ -1,9 +1,26 @@
 [tool.poetry]
 name = "hymn-ocr"
-version = "0.1.0"
+version = "0.3.1"
 description = "Convert PDF hymnals to YAML using OCR and computer vision"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["Nitai Vital <nitai@vital.dev>"]
 readme = "README.md"
+license = "MIT"
+homepage = "https://github.com/nitaibezerra/hymn-ocr"
+repository = "https://github.com/nitaibezerra/hymn-ocr"
+keywords = ["ocr", "pdf", "hymn", "hymnal", "yaml", "tesseract", "computer-vision"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Religion",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics :: Capture :: Scanners",
+    "Topic :: Text Processing :: General",
+]
 packages = [{include = "hymn_ocr", from = "src"}]
 
 [tool.poetry.dependencies]
@@ -17,6 +34,7 @@ pyyaml = "^6.0"
 typer = "^0.15.0"
 rich = "^13.0.0"
 numpy = "^1.26.0"
+scipy = "^1.11.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
